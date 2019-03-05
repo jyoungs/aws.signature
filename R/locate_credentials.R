@@ -20,11 +20,11 @@
 #'   \item a profile in a global credentials dot file in a location set by \env{AWS_SHARED_CREDENTIALS_FILE} or defaulting typically to \file{~/.aws/credentials} (or another OS-specific location), using the profile specified by \env{AWS_PROFILE}
 #'   \item the default profile in that global credentials file
 #' }
-#' 
+#'
 #' If \env{AWS_ACCESS_KEY_ID} and \env{AWS_SECRET_ACCESS_KEY} environment variables are not present when the package is loaded, then \code{use_credentials} is invoked using the file specified in \env{AWS_SHARED_CREDENTIALS_FILE} (or another default location) and the profile specified in \env{AWS_PROFILE} (or, if missing, the \dQuote{default} profile).
-#' 
+#'
 #' To use this (and any cloudyr package) on AWS EC2 instances, users will also need to install the \href{https://cran.r-project.org/package=aws.ec2metadata}{aws.ec2metadata} package, which allows \code{locate_credentials} to know it is running in an instance and check for relevant values. If this package is not installed, instance metadata is not checked.
-#' 
+#'
 #' Because region is often handled slightly differently from credentials and is required for most requests (whereas some services allow anonymous requests without specifying credentials), the value of region is searched for in the same order as the above but lacking a value there fails safe with the following preference ranking of possible region values (regardless of location of other credentials):
 #' \enumerate{
 #'   \item a user-supplied value
@@ -33,12 +33,12 @@
 #'   \item (if a credentials file is being used) the value specified therein
 #'   \item the default value specified in \code{default_region} (i.e., \dQuote{us-east-1})
 #' }
-#' 
+#'
 #' As such, user-supplied values of \code{region} always trump any other value.
-#' 
+#'
 #' @seealso \code{\link{signature_v4}}, \code{\link{signature_v2_auth}}, \code{\link{use_credentials}}
 #' @export
-locate_credentials <- 
+locate_credentials <-
 function(
   key = NULL,
   secret = NULL,
@@ -49,11 +49,11 @@ function(
   default_region = "us-east-1",
   verbose = getOption("verbose", FALSE)
 ) {
-    
+
     if (isTRUE(verbose)) {
         message("Locating credentials")
     }
-    
+
     # check for user-supplied values
     if (isTRUE(verbose)) {
         message("Checking for credentials in user-supplied values")
@@ -76,18 +76,18 @@ function(
         }
         # now find region, with fail safes
         region <- find_region_with_failsafe(region = region, default_region = default_region, verbose = verbose)
-        
+
         # early return
         return(list(key = key, secret = secret, session_token = session_token, region = region))
     }
-    
+
     # otherwise try to use environment variables if no user-supplied values
     # grab environment variables
     env <- list(key = Sys.getenv("AWS_ACCESS_KEY_ID"),
                 secret = Sys.getenv("AWS_SECRET_ACCESS_KEY"),
                 session_token = Sys.getenv("AWS_SESSION_TOKEN"),
                 region = Sys.getenv("AWS_DEFAULT_REGION"))
-    
+
     if ((!is.null(env$key) && env$key != "") || (!is.null(env$secret) && env$secret != "")) {
         # otherwise use environment variables if no user-supplied values
         if (isTRUE(verbose)) {
@@ -134,11 +134,59 @@ function(
         }
         # now find region, with fail safes
         region <- find_region_with_failsafe(region = region, default_region = default_region, verbose = verbose)
-        
+
         # early return
         return(list(key = key, secret = secret, session_token = session_token, region = region))
     }
-    
+
+    # lacking that, check for ECS metadata
+    if (isTRUE(check_ecs())) {
+        if (isTRUE(verbose)) {
+            message("Checking for credentials in ECS Instance Metadata")
+        }
+        ecs_meta <- try(aws.ec2metadata::ecs_metadata(), silent = TRUE)
+        if (!inherits(ecs_meta, "try-error")) {
+            if (!is.null(ecs_meta[["AccessKeyId"]])) {
+                key <- ecs_meta[["AccessKeyId"]]
+                if (isTRUE(verbose)) {
+                    message("Using ECS Instance Metadata for AWS Access Key ID")
+                }
+            }
+            if (!is.null(ecs_meta[["SecretAccessKey"]])) {
+                secret <- ecs_meta[["SecretAccessKey"]]
+                if (isTRUE(verbose)) {
+                    message("Using ECS Instance Metadata for AWS Secret Access Key")
+                }
+            }
+            if (!is.null(ecs_meta[["Token"]])) {
+                session_token <- ecs_meta[["Token"]]
+                if (isTRUE(verbose)) {
+                    message("Using ECS Instance Metadata for AWS Session Token")
+                }
+            }
+        }
+        # now find region, with fail safes
+        if (!is.null(region) && region != "") {
+            region <- region
+            if (isTRUE(verbose)) {
+                message(sprintf("Using user-supplied value for AWS Region ('%s')", region))
+            }
+        } else if (!is.null(env$region) && env$region != "") {
+            region <- env$region
+            if (isTRUE(verbose)) {
+                message(sprintf("Using Environment Variable 'AWS_DEFAULT_REGION' for AWS Region ('%s')", region))
+            }
+        } else  {
+            region <- default_region
+            if (isTRUE(verbose)) {
+                message(sprintf("Using default value for AWS Region ('%s')", region))
+            }
+        }
+
+        # early return
+        return(list(key = key, secret = secret, session_token = session_token, region = region))
+    }
+
     # lacking that, check for EC2 metadata
     if (isTRUE(check_ec2())) {
         if (isTRUE(verbose)) {
@@ -191,55 +239,7 @@ function(
                 }
             }
         }
-        
-        # early return
-        return(list(key = key, secret = secret, session_token = session_token, region = region))
-    }
-    
-    # lacking that, check for ECS metadata
-    if (isTRUE(check_ecs())) {
-        if (isTRUE(verbose)) {
-            message("Checking for credentials in ECS Instance Metadata")
-        }
-        ecs_meta <- try(aws.ec2metadata::ecs_metadata(), silent = TRUE)
-        if (!inherits(ecs_meta, "try-error")) {
-            if (!is.null(ecs_meta[["AccessKeyId"]])) {
-                key <- ecs_meta[["AccessKeyId"]]
-                if (isTRUE(verbose)) {
-                    message("Using ECS Instance Metadata for AWS Access Key ID")
-                }
-            }
-            if (!is.null(ecs_meta[["SecretAccessKey"]])) {
-                secret <- ecs_meta[["SecretAccessKey"]]
-                if (isTRUE(verbose)) {
-                    message("Using ECS Instance Metadata for AWS Secret Access Key")
-                }
-            }
-            if (!is.null(ecs_meta[["Token"]])) {
-                session_token <- ecs_meta[["Token"]]
-                if (isTRUE(verbose)) {
-                    message("Using ECS Instance Metadata for AWS Session Token")
-                }
-            }
-        }
-        # now find region, with fail safes
-        if (!is.null(region) && region != "") {
-            region <- region
-            if (isTRUE(verbose)) {
-                message(sprintf("Using user-supplied value for AWS Region ('%s')", region))
-            }
-        } else if (!is.null(env$region) && env$region != "") {
-            region <- env$region
-            if (isTRUE(verbose)) {
-                message(sprintf("Using Environment Variable 'AWS_DEFAULT_REGION' for AWS Region ('%s')", region))
-            }
-        } else  {
-            region <- default_region
-            if (isTRUE(verbose)) {
-                message(sprintf("Using default value for AWS Region ('%s')", region))
-            }
-        }
-        
+
         # early return
         return(list(key = key, secret = secret, session_token = session_token, region = region))
     }
@@ -262,7 +262,7 @@ function(
         if (isTRUE(verbose)) {
             message(sprintf("Using profile '%s' from local credentials files from '%s'", profile, file.path(".aws", "credentials")))
         }
-        
+
         # early return
         return(credentials_to_list(cred, region = region, default_region = default_region, verbose = verbose))
     } else if (file.exists(file) || file.exists(default_credentials_file())) {
@@ -284,18 +284,18 @@ function(
         if (isTRUE(verbose)) {
             message(sprintf("Using profile '%s' from global credentials files from '%s'", profile, default_credentials_file()))
         }
-        
+
         # early return
         return(credentials_to_list(cred, region = region, default_region = default_region, verbose = verbose))
     }
-        
+
     # if that fails, no credentials can be found anywhere
     if (isTRUE(verbose)) {
         message("No user-supplied credentials, environment variables, instance metadata, or credentials file found!")
     }
     # find region, with fail safes
     region <- find_region_with_failsafe(region = region, default_region = default_region, verbose = verbose)
-    
+
     # return identified values
     list(key = key, secret = secret, session_token = session_token, region = region)
 }
@@ -393,7 +393,7 @@ function(
             }
         }
     }
-    
+
     # return values
     return(list(key = key, secret = secret, session_token = session_token, region = region))
 }
